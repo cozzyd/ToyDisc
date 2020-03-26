@@ -88,7 +88,6 @@
   \frametitle{Elevation Dependence} 
   \centering
   \includegraphics[width=5in]{theta18}
-
 \end{frame} 
 
 
@@ -98,13 +97,12 @@
     \item Small, but statistically significant difference between the two generators. 
       \begin{itemize} 
        \item Size of effect on real simulation might be different when including raytracing, more sophisticated trigger.
-       \item Size of effect on ANITA, which samples a much narrower angular range, might be much larger. 
+       \item Size of effect on ANITA, which samples a much narrower angular range with a more complex geometry, might be much larger. 
      \end{itemize} 
     \item Note that since $w_{x} \approx  L_{proj} /L_{int}$, the two expressions for $<A_{eff}>|_{\Omega}$ are not so different. 
     \begin{itemize} 
-      \item If instead of a box independent of the incoming angle, we used the projected area for each angle (so no trajectories miss), then you would get the expression as A (since $V_{mc} = L_{proj} A_{proj}$), but  I think that would be biased as we would improperly sample some directions more than others.
-      \item So I think difference has to do with the fact that different directions have different projected areas (but normalization is not obvious, at least to me). Also not obvious (to me) what the effect is of parts of the volume that don't contribute to integral. 
-        \item But I thought that this was tried and didn't work for some reason? (maybe the normalization wasn't correct?) 
+      \item If instead of a box independent of the incoming angle, we used the projected area for each angle (so no trajectories miss), then you would get almost the same expression as A (since $V_{mc} = <L_{proj}> A_{proj}$), but I don't think you can factor out the integral over $L_{proj}$ out of the other factors in the general case, possibly accounting for the difference.
+      \item Suggests possible correction factor of $L_{proj}/ (<L_{proj}>(\theta))$ (or something like that) that might bring the two together (haven't tried this yet). 
     \end{itemize}
 \end{itemize} 
 \end{frame}
