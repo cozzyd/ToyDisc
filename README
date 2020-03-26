@@ -1,0 +1,3 @@
+Toy Disc MC for neutrino sampling. 
+
+Recommend you compile it with ACLIC for speed (e.g. root ToyDisc.C+). First argument is the sampling mode (0 = unforced, 1 = forced), second argument is the energy. 

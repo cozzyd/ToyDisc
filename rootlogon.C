@@ -1,0 +1,5 @@
+{
+
+  gStyle->SetNumberContours(255); 
+
+}

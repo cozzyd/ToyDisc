@@ -12,7 +12,11 @@
 #include "TVector3.h" 
 #include "TRandom3.h" 
 #include "TMath.h" 
+#include "TH2.h" 
+#include "TF1.h" 
+#include "TVectorD.h"
 
+#include <fenv.h> 
 
 
 
@@ -23,7 +27,7 @@ const double freq_ref = 1.15e3;
 double cross_section(double E, bool cc, bool nubar) 
 {
   
-  const double C0[2][2] = { { -1.826, -1.826}, {-1.033, -10.033}}; 
+  const double C0[2][2] = { { -1.826, -1.826}, {-1.033, -1.033}}; 
   const double C1[2][2] = { { -17.31, -17.31}, {-15.95, -15.95}}; 
   const double C2[2][2] = { { -6.448, -6.406}, {-7.296, -7.247}}; 
   const double C3[2][2] = { { 1.431,1.431}, {1.569, 1.569}}; 
@@ -50,13 +54,6 @@ int randomFlavor(TRandom * rng = gRandom)
 
 
 
-//calculates interaction length 
-double Lint(double E, bool cc, bool nubar, double rho) 
-{
-  double N = 1e9*rho / 1.66e-24; 
-  return 1/(cross_section(E,cc,nubar)*N); 
-
-}
 
 //randomly picks charged current or not
 bool isCC(double E, TRandom * rng= gRandom) 
@@ -128,6 +125,7 @@ double inelasticity(double E, bool cc, bool nubar, TRandom * rng = gRandom)
 TVector3 random_dir(double cos_theta_min = -1, double cos_theta_max = 1, double phi_min = 0, double phi_max = 2*TMath::Pi(), TRandom * rng = gRandom)
 {
   double cos_theta = rng->Uniform(cos_theta_min, cos_theta_max); 
+  if (phi_max < phi_min) phi_max += 2 *TMath::Pi(); 
   double phi = rng->Uniform(phi_min, phi_max); 
   double sin_theta = sqrt(1-cos_theta*cos_theta); 
   return TVector3( cos(phi) * sin_theta, sin(phi) *sin_theta, cos_theta); 
@@ -145,13 +143,21 @@ struct ToyDiscEvent
   double interaction_weight = 1; 
   double lint = 0;
   double Efield = 0; 
+  double Ech_1m = 0; 
+  double particle_depth = 0;
+  double view_angle = 0; 
+  double entrance_distance = 0; 
+  double atten_factor = 0; 
+  int nint =0; 
   bool pass = false ; 
+  bool should_save = false; 
   bool forced_interaction = true; 
   bool in_volume = false; 
   int cc = 0; 
   double lproj = 0; 
 }; 
 
+// random exponential variate 
 double ranexp(double tau, double min_val = 0, double max_val = -1, TRandom * rng = gRandom) 
 {
  return -tau * log(rng->Uniform(max_val > 0 ? exp(-max_val/tau) : 0,exp(-min_val/tau))) ;
@@ -160,18 +166,54 @@ double ranexp(double tau, double min_val = 0, double max_val = -1, TRandom * rng
 
 struct ToyDiscSetup
 {
-  double R = 5e3; 
+  double R = 15e3; 
   double h = 3e3; 
   double rho = 0.917; //g/cm^3
   double n = 1.78; 
-  double freq = 300; //frequency used for askaryan calculation
+  double freq_min = 150; //frequency used for askaryan calculation
+  double freq_max = 600; //frequency used for askaryan calculation
+  double freq_step = 10; 
   double threshold=10e-6; //V/m
-  double threshold_rms = 2e-6; 
+  double save_thresold=1e-6; //V/m // save events with at least this much efield 
+  double Rearth = 6371e3; 
+  double threshold_rms = 1e-9; 
   double attenuation_length = 1e3; //m 
+  int nbins_slant = 360; 
+  int nbins_depth = 100; 
   TVector3 detector = TVector3(0,0,-100); //detector location
 };
 
-static ToyDiscSetup default_setup; 
+ToyDiscSetup default_setup; 
+
+
+double prem_slant_depth(const TVector3 & pos, const TVector3 & dir, double ice_height = 3000, double earth_radius = 6371e3, double ice_density = 0.917); 
+
+void setup_h_slant(TH2 & hslant, const ToyDiscSetup & s) 
+{
+  
+
+  //let's create the histogram 
+
+  for (int j = 1; j <= hslant.GetNbinsY(); j++) 
+  {
+
+    TVector3 pos(0,0,hslant.GetYaxis()->GetBinCenter(j)); 
+    for (int i = 1; i <= hslant.GetNbinsX(); i++) 
+    {
+      double ang = hslant.GetXaxis()->GetBinCenter(i); 
+      TVector3 dir(0, sin(ang), cos(ang)); 
+      hslant.SetBinContent(i,j, prem_slant_depth(pos,dir,s.h, s.Rearth, s.rho)); 
+    }
+
+    hslant.SetTitle("Slant depth"); 
+    hslant.GetXaxis()->SetTitle("Angle below horizontal [rad]"); 
+    hslant.GetYaxis()->SetTitle("Depth [m]"); 
+    hslant.GetZaxis()->SetTitle("Slant Depth [g/cm^{2}]"); 
+    hslant.SetStats(0); 
+  }
+
+}
+
 
 class ToyDiscSim  
 {
@@ -183,15 +225,15 @@ class ToyDiscSim
   double the_sampling_area;
   double the_sampling_volume; 
   double the_sampling_half_length; 
-  TH1D hslant; 
+  TH2D hslant; 
 
   public: 
     ToyDiscSim(const ToyDiscSetup & setup = default_setup,  TRandom * rng = gRandom, int nbins_slant = 360) 
-      : s(setup), rng(rng), hslant("hslant","SlantDepth;angle;grammage (g cm^2)", 
+      : s(setup), rng(rng), hslant("hslant","SlantDepth;angle;grammage (g cm^2)", s.nbins_slant,0,TMath::Pi(), 1+s.nbins_depth, -s.h+(-s.h/s.nbins_depth)/2, s.h/s.nbins_depth/2) 
     {
 
-      hslant.SetDirectory(0); 
-      s= setup; 
+      setup_h_slant(hslant,s); 
+
       R2 = s.R*s.R;
       h2 = s.h*s.h;
 
@@ -202,6 +244,7 @@ class ToyDiscSim
     }
 
 
+    const ToyDiscSetup * setup() { return &s; } 
     double sampling_area() const { return the_sampling_area; }
     double sampling_box_half_length() { return the_sampling_half_length ;} 
     double sampling_volume() const { return the_sampling_volume; } 
@@ -217,6 +260,7 @@ class ToyDiscSim
     }
 
 
+    const TH2D & getHSlant() { return hslant ; }
 
     //returns true if in the volume! 
     bool doEvent(ToyDiscEvent * event, double E, const TVector3 & x0, const TVector3 & direction, bool forced_interaction = true, int flavor = 0, int cc = -1)
@@ -228,8 +272,9 @@ class ToyDiscSim
 
 
       double theta = direction.Theta(); 
-      event->projected_area = TMath::Pi() * R2 *cos(theta) + 2* s.R * s.h * sin(theta); 
+      event->projected_area = TMath::Pi() * R2 *fabs(cos(theta)) + 2* s.R * s.h * fabs(sin(theta)); 
 
+      event->nint = nint; 
       event->E = E; 
       event->forced_interaction = forced_interaction;
 
@@ -243,10 +288,16 @@ class ToyDiscSim
         event->flavor = 0; 
         event->absorption_weight = 0;
         event->interaction_weight  = 0; 
+        event->particle_depth = 0;
+        event->entrance_distance  = 0; 
         event->pass = false; 
+        event->should_save = false; 
         event->Efield = 0;
         event->lint = 0; 
         event->lproj = 0; 
+        event->view_angle = 0; 
+        event->Ech_1m = 0; 
+        event->atten_factor = 0; 
         event->Eshower = 0; 
         return false;
       }
@@ -258,18 +309,26 @@ class ToyDiscSim
 
       TVector3 vertex = x0; 
 
+      event->lproj = fabs(ts[1]-ts[0]); 
+      double sigma = cross_section(E,cc,flavor < 0); 
+      double number_density = s.rho / 1.66e-24; 
+      event->lint = 1./(number_density*sigma*100); //m 
+
       if (!forced_interaction) 
       {
         double where = ranexp(event->lint, 0, event->lproj);
         vertex = (ts[0] < ts[1] ? x1 : x2)  + direction*where; 
+        if (!inside(vertex) || std::isnan(vertex.X()))
+        {
+          printf("%g %g %g\n", where, event->lint, event->lproj);
+          vertex.Print(); 
+        }
       }
 
       event->in_volume = true; 
       event->vertex = vertex; 
       event->flavor = flavor; 
       event->cc = cc; 
-      event->lint = Lint(E, cc, flavor < 0, s.rho); 
-      event->lproj = fabs(ts[1]-ts[0]); 
       event->interaction_weight = 1-exp(-event->lproj/event->lint); 
 
 
@@ -281,17 +340,35 @@ class ToyDiscSim
       double y  =inelasticity(E,cc,flavor < 0, rng); 
       double Eshow = em ? (1-y)*E : y*E; 
       event->Eshower = Eshow; 
-      double width = coneWidth(em, Eshow, s.freq, s.rho, s.n); 
-      double E1m_cher = 2.53e-7 * Eshow/1e12 * s.freq/freq_ref  / (1 + pow(s.freq/freq_ref,1.44));
-
       double cos_cher = 1/s.n; 
       double cher = acos(cos_cher); 
       double sin_cher = sin(cher); 
       double view_angle = fabs(cher-det_angle); 
-      double Efield =  E1m_cher * atten_factor  * sin(view_angle)/sin_cher * TMath::Gaus(view_angle,0,width); 
+      double E1m_cher = 0; 
+      double Efield = 0; 
+      for (double freq = s.freq_min; freq <= s.freq_max; freq+= s.freq_step )
+      {
+       double this_E1m_cher = s.freq_step * 2.53e-7 * Eshow/1e12 * freq/freq_ref  / (1 + pow(freq/freq_ref,1.44));
+       E1m_cher +=  this_E1m_cher; 
+       double width = coneWidth(em, Eshow, freq, s.rho, s.n); 
+       Efield +=  this_E1m_cher * atten_factor  * sin(view_angle)/sin_cher * TMath::Gaus(view_angle,0,width); 
+      }
+
       event->Efield = Efield; 
+      event->Ech_1m = E1m_cher; 
+      event->atten_factor = atten_factor; 
+      event->view_angle = view_angle; 
       event->pass =  Efield > rng->Gaus(s.threshold,s.threshold_rms); 
-      event->absorption_weight = 1; //TODO  
+      event->should_save =  Efield > s.save_thresold; 
+
+      event->particle_depth = hslant.Interpolate(theta,vertex.Z()) /  1.66e-24; // convert g/cm^2 to nucleons / cm^2
+
+      //subtract the particle depth within the interaction volume 
+      TVector3 entrance = ts[0] < ts[1] ? x1 : x2; 
+      event->entrance_distance = (entrance-vertex).Mag()*100;  //in cm
+      event->particle_depth -= (number_density * event->entrance_distance); 
+      if (event->particle_depth < 0) event->particle_depth = 0; 
+      event->absorption_weight = exp(-event->particle_depth*sigma); 
 
     return true; 
   }
@@ -336,27 +413,26 @@ class ToyDiscSim
     if (nint  < 2 ) 
     {
 
-      TVector3 x1 = x0 + p; 
 
       double dx = p.X(); 
       double dy = p.Y(); 
-      double dr = p.Perp2(); 
+      double dr2 = dx*dx+dy*dy; 
 
       double D = x0.X() * (x0.Y() +dy) - (x0.X()+dx)*x0.Y(); 
 
 
-      double discr = R2*dr*dr -D*D; 
+      double discr = R2*dr2 -D*D; 
       if (discr < 0)
       {
         return nint;
       }
 
-      for (double sign = 1; sign >=-1; sign-=2) 
+      for (int sign = 1; sign >=-1; sign-=2) 
       {
         double xx = D * dy  + sign*(dy > 0 ? 1 : -1) * dx *sqrt(discr); 
-        xx/=(dr*dr); 
-        double yy = -D * dx  + sign*fabs(dy) * dx *sqrt(discr); 
-        yy/=(dr*dr);
+        xx/=(dr2); 
+        double yy = -D * dx  + sign*fabs(dy) *sqrt(discr); 
+        yy/=(dr2);
         double t = (p.X() ==0) ?  (yy-x0.Y()/p.Y()) : (xx-x0.X())/p.X();
 
         double zz = x0.Z() + t * p.Z(); 
@@ -392,7 +468,7 @@ class ToyDiscSim
     {
       x = rng->Uniform(-s.R,s.R);
       y = rng->Uniform(-s.R,s.R);
-    } while (x*x+y*y < R2); 
+    } while (x*x+y*y > R2); 
 
     return TVector3(x,y,z); 
   }
@@ -420,12 +496,12 @@ double prem_density(double r, double ice_height = 3000, double earth_radius = 63
 {
 
   if (r ==0) return  1.3088e1 ; 
-  if (r > earth_radius) return 0; 
+  if (r >= earth_radius) return 0; 
 
   double rs[11] = { 1.2215e6, 3.48e6, 3.63e6, 5.701e6, 5.77e6, 5.971e6, 6.151e6, 6.3466e6, 6.356e6, earth_radius-ice_height, earth_radius};
   double as[11] = { -2.1773e-10, -2.4123e-10, 0,-3.0922e-11,0,0,0,0,0,0,0}; 
   double bs[11] = { 1.911e-8, 1.3976e-4, -5.0007e-4, -2.4441e-4, -2.3286e-4, -1.2603e-3, -5.9706e-4, 1.0869e-4,0,0,0};
-  double cs[11] = { 1.3088e4, 1.2346e4, 7.3067e4, 6.7823e3, 5.3197e3, 1.1249e4, 7.1083e3, 2.691e3, 2.9e3, 2.6e3, ice_density*1e3};
+  double cs[11] = { 1.3088e4, 1.2346e4, 7.3067e3, 6.7823e3, 5.3197e3, 1.1249e4, 7.1083e3, 2.691e3, 2.9e3, 2.6e3, ice_density*1e3};
 
   int i = std::upper_bound(rs, rs + 11, r) - rs; 
 
@@ -433,52 +509,97 @@ double prem_density(double r, double ice_height = 3000, double earth_radius = 63
 }
 
 
-/* Integrate backwards from position until outside the surface of the earth. Returns slant depth in g/cm^2*/
-double prem_slant_depth(const TVector3 & pos, const TVector3 & dir, double step = 10, double ice_height = 3000, double earth_radius = 6371e3, double ice_density = 0.917) 
+
+/* Integrate backwards from position until outside the surface of the earth. Returns slant depth in g/cm^2
+ * */
+
+TVector3 origin(0,0,0); 
+
+int sphere_intersection(const TVector3 & pos, const TVector3 & dir, double * ts,  double R = 6371e3, const TVector3 & x0 = origin) 
+{
+  TVector3 o = pos-origin; 
+  TVector3 l = dir.Unit(); 
+  double lo = l*o; 
+  double discr2 = lo*lo - (o.Mag2()-R*R); 
+  int nint = discr2 < 0 ? 0 : 
+            discr2 == 0 ? 1 : 
+            2; 
+
+
+  if (ts && nint) 
+  {
+    double discr = sqrt(discr2); 
+    ts[0] = -lo - discr; 
+    ts[1] = -lo + discr; 
+  }
+
+  return nint; 
+
+
+
+}
+  
+
+
+
+double prem_slant_depth(const TVector3 & pos, const TVector3 & dir, 
+                        double ice_height , double earth_radius , double ice_density ) 
 {
 
   double grammage = 0; 
-  TVector3 x = pos + TVector3(0,0,earth_radius); 
+  TVector3 x0 = pos + TVector3(0,0,earth_radius); //move to top of ice 
+  TVector3 v = dir.Unit(); 
 
-  double init_R2 = x.Mag2(); 
-  double R2 = 0; 
-  TVector3 u = dir.Unit();
-  while (R2 < init_R2) 
-  {
-    double R = sqrt(R2); 
-//    printf("%g\n",R); 
-    double rho = prem_density(R, ice_height, earth_radius, ice_density); 
-    grammage += rho * (step*100); 
-    x -= u*step; 
-    R2 = x.Mag2(); 
-  }
+  //find intersection with sphere 
+  double ts[2]; 
+  int nint = sphere_intersection(x0,dir, ts, earth_radius); 
+  if (nint < 2) return 0; 
 
-  return grammage; 
+  double tmin = ts[0]; // this was the spehre intersection that the neturino saw before
+  double tmax = TMath::Min(0.,ts[1]); // integrate either to us or earth surface, whichever was sooner
+
+  //use TF1 interface for integral out of laziness
+  TF1 f("fintegral", [=](double *xx, double *P) 
+      {
+      double t = *xx; 
+      double r =  (x0 + t*v).Mag(); 
+      return prem_density(r, ice_height, earth_radius, ice_density);
+      }, tmin, tmax,0); 
+
+
+
+
+  return f.Integral(tmin,tmax,1e-3)*100;  //100 to convert m to cm in integration
 }
 
 
 
-void ToyDisc(int forced = 1, double E = 1e18,  int N = 1e6, double cos_theta_min = -1, double cos_theta_max = 1, double phi_min = 0, double phi_max = TMath::Pi()*2 ) 
+void ToyDisc(int forced = 1, double E = 1e18,  int N = 1e8, double cos_theta_min = -1,
+              double cos_theta_max = 1, double phi_min = 0, double phi_max = TMath::Pi()*2 ) 
 {
 
   printf("Running in %s mode at E=%g eV for %d events.\n", forced ? "FORCED" : "UNFORCED", E, N ); 
   double str = (cos_theta_max-cos_theta_min) * (phi_max-phi_min) / TMath::Pi(); 
   printf("Number of steradians is %g pi \n", str); 
+
+  ToyDiscSim sim; 
+
   TFile f(Form("toydisc_%d_%g.root",forced, log10(E)),"RECREATE"); 
 
   TTree * t = new TTree("toy","toy"); 
   ToyDiscEvent * event = new ToyDiscEvent;
   t->Branch("event",&event); 
-
-  ToyDiscSim sim; 
+  int i ; 
+  t->Branch("i",&i); 
 
   double sum_weights = 0; 
   int one_percent = N/100; 
   int last_percent= 0; 
-  for (int i = 0; i < N; i++) 
+
+  for (i = 0; i < N; i++) 
   {
     sim.randomEvent(event, E, forced, cos_theta_min, cos_theta_max, phi_min, phi_max); 
-    t->Fill(); 
+
 
     if (i > one_percent + last_percent) 
     {
@@ -487,6 +608,7 @@ void ToyDisc(int forced = 1, double E = 1e18,  int N = 1e6, double cos_theta_min
       last_percent+=one_percent; 
     }
 
+    if (event->should_save) t->Fill(); 
     if (event->pass) 
     {
 
@@ -506,23 +628,25 @@ void ToyDisc(int forced = 1, double E = 1e18,  int N = 1e6, double cos_theta_min
 
   if (forced)
   {
-    sum_weights *= sim.sampling_volume() / N;
+    sum_weights *= sim.sampling_volume() / N ; 
   }
   else
   {
     sum_weights *= sim.sampling_area() / N;
   }
 
-  printf("Average Effective area over %gpi str is %g\n", str, sum_weights); 
   t->Write(); 
+  printf("Average Effective area over %gpi str is %g m^2\n", str, sum_weights); 
+  TTree * ts = new TTree("meta","meta"); 
+  const ToyDiscSetup * s = sim.setup(); 
+  ts->Branch("setup", &s); 
+  ts->Branch("forced", &forced); 
+  ts->Branch("N", &N); 
+  ts->Branch("mean_Aeff", &sum_weights); 
+  ts->Fill(); 
+  ts->Write(); 
+
+
+  sim.getHSlant().Write(); 
 }
-
-
-
-
-
-
-
-
-
 
