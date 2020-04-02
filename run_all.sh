@@ -1,14 +1,18 @@
 #! /bin/sh
 
-root -b -q ToyDisc.C+\(0,1e18\) 
-root -b -q ToyDisc.C+\(0,3.16e17\) 
-root -b -q ToyDisc.C+\(0,1e17\) 
-root -b -q ToyDisc.C+\(0,3.16e16\) 
-root -b -q ToyDisc.C+\(0,1e16\) 
+root -b -q -e '.L ToyDisc.C+' 
 
-root -b -q ToyDisc.C+\(1,1e18\) 
-root -b -q ToyDisc.C+\(1,3.16e17\) 
-root -b -q ToyDisc.C+\(1,1e17\) 
-root -b -q ToyDisc.C+\(1,3.16e16\) 
-root -b -q ToyDisc.C+\(1,1e16\) 
 
+N=1e9 
+jobsfile=JOBS
+rm -f $jobsfile
+
+for E in 1e18 3.16e17 1e17 3.16e16 1e16
+do
+  for forced in 0 1
+  do
+  echo "root -b -q ToyDisc.C+\($forced,$E,$N\) > ${forced}_$E.log" >> $jobsfile 
+done 
+done
+
+parallel < $jobsfile 
