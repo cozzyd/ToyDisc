@@ -174,7 +174,7 @@ struct ToyDiscSetup
   double freq_max = 600; //frequency used for askaryan calculation
   double freq_step = 10; 
   double threshold=10e-6; //V/m
-  double save_thresold=1e-6; //V/m // save events with at least this much efield 
+  double unbiased_save_fraction=1e-2; // save this fraction of unbiased events
   double Rearth = 6371e3; 
   double threshold_rms = 1e-9; 
   double attenuation_length = 1e3; //m 
@@ -277,8 +277,9 @@ class ToyDiscSim
       event->nint = nint; 
       event->E = E; 
       event->forced_interaction = forced_interaction;
-
       event->direction = direction; 
+      event->should_save =  rng->Uniform(0,1) < s.unbiased_save_fraction; //unbiased save fraction
+
       if (nint == 0 || (forced_interaction && !inside(x0)))  //this misses the volume 
       {
         event->in_volume = false; 
@@ -291,7 +292,6 @@ class ToyDiscSim
         event->particle_depth = 0;
         event->entrance_distance  = 0; 
         event->pass = false; 
-        event->should_save = false; 
         event->Efield = 0;
         event->lint = 0; 
         event->lproj = 0; 
@@ -359,15 +359,9 @@ class ToyDiscSim
       event->atten_factor = atten_factor; 
       event->view_angle = view_angle; 
       event->pass =  Efield > rng->Gaus(s.threshold,s.threshold_rms); 
-      event->should_save =  Efield > s.save_thresold; 
 
-      event->particle_depth = hslant.Interpolate(theta,vertex.Z()) /  1.66e-24; // convert g/cm^2 to nucleons / cm^2
-
-      //subtract the particle depth within the interaction volume 
       TVector3 entrance = ts[0] < ts[1] ? x1 : x2; 
-      event->entrance_distance = (entrance-vertex).Mag()*100;  //in cm
-      event->particle_depth -= (number_density * event->entrance_distance); 
-      if (event->particle_depth < 0) event->particle_depth = 0; 
+      event->particle_depth = hslant.Interpolate(theta,entrance.Z()) /  1.66e-24; // convert g/cm^2 to nucleons / cm^2
       event->absorption_weight = exp(-event->particle_depth*sigma); 
 
     return true; 
@@ -608,7 +602,7 @@ void ToyDisc(int forced = 1, double E = 1e18,  int N = 1e8, double cos_theta_min
       last_percent+=one_percent; 
     }
 
-    if (event->should_save) t->Fill(); 
+    if (event->should_save || event->pass) t->Fill(); 
     if (event->pass) 
     {
 

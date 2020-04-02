@@ -3,6 +3,8 @@ TChain cA("toy");
 TChain cB("toy"); 
 TCut wA;
 TCut wB;
+TCut wA_vol;
+TCut wB_vol;
 
 
 void setAStyle(TH1 * h)
@@ -31,6 +33,8 @@ void makePlots(double R = 15000, double h = 3000)
 
   wB = Form("pass*absorption_weight*interaction_weight * %f", factorB);
   wA = Form("pass*absorption_weight/lint * %f", factorA);
+  wB_vol = Form("should_save*in_volume*absorption_weight*interaction_weight * %f", factorB);
+  wA_vol = Form("should_save*in_volume*absorption_weight/lint * %f", factorA);
 
   cA.Add("toydisc_1*.root"); 
   cB.Add("toydisc_0*.root"); 
@@ -91,5 +95,34 @@ void makePlots(double R = 15000, double h = 3000)
   theta18_B->Draw("same"); 
   theta17_B->Draw("same"); 
   gPad->BuildLegend(0.7,0.7,0.9,0.9); 
+
+
+  TCanvas * c3 = new TCanvas; 
+  c3->SetTitle("In Volume"); 
+
+  TH1D * theta18_A_invol = new TH1D("theta18A_invol", "Method A (1e18); cos #theta_{#nu};  d <A_{eff}> |_{4#pi} / d cos #theta_{#nu} [m^{2}] (in volume)", 60,-1,1);
+  TH1D * theta18_B_invol = new TH1D("theta18B_invol", "Method B (1e18); cos #theta_{#nu};  d <A_{eff}> |_{4#pi} / d cos #theta_{#nu} [m^{2}] (in volume)", 60,-1,1);
+  TH1D * theta17_A_invol = new TH1D("theta17A_invol", "Method A (1e17); cos #theta_{#nu};  d <A_{eff}> |_{4#pi} / d cos #theta_{#nu} [m^{2}] (in volume)", 60,-1,1);
+  TH1D * theta17_B_invol = new TH1D("theta17B_invol", "Method B (1e17); cos #theta_{#nu};  d <A_{eff}> |_{4#pi} / d cos #theta_{#nu} [m^{2}] (in volume)", 60,-1,1);
+
+  setAStyle(theta18_A_invol); 
+  setAStyle(theta17_A_invol); 
+  setBStyle(theta18_B_invol); 
+  setBStyle(theta17_B_invol); 
+  theta17_A_invol->SetLineColor(42);
+  theta17_B_invol->SetLineColor(33);
+
+
+  cA.Draw("cos(direction.Theta()) >> theta18A_invol", wA_vol * TCut("E==1e18"),"goff"); 
+  cA.Draw("cos(direction.Theta()) >> theta17A_invol", wA_vol * TCut("E==1e17"),"goff"); 
+  cB.Draw("cos(direction.Theta()) >> theta18B_invol", wB_vol * TCut("E==1e18"),"goff"); 
+  cB.Draw("cos(direction.Theta()) >> theta17B_invol", wB_vol * TCut("E==1e17"),"goff"); 
+
+  theta18_A_invol->Draw(); 
+  theta17_A_invol->Draw("same"); 
+  theta18_B_invol->Draw("same"); 
+  theta17_B_invol->Draw("same"); 
+  gPad->BuildLegend(0.7,0.7,0.9,0.9); 
+
 
 }
